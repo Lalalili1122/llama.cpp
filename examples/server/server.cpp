@@ -373,9 +373,14 @@ struct llama_server_context {
             llama_client_slot slot;
 
             slot.id = i;
-            slot.n_ctx = n_ctx_slot;
-
-            LOG_TEE(" -> Slot %i - max context: %i\n", slot.id, n_ctx_slot);
+            if ((i == 0 || i == 1) && params.n_parallel == 4 && n_ctx == 96000) {
+                slot.n_ctx = n_ctx / 3;
+            } else if (params.n_parallel == 4 && n_ctx == 96000) {
+                slot.n_ctx = n_ctx / 6;
+            } else {
+                slot.n_ctx = n_ctx_slot;
+            }
+            LOG_TEE(" -> Slot %i - max context: %i\n", slot.id, slot.n_ctx);
 
             const int ga_n = params.grp_attn_n;
             const int ga_w = params.grp_attn_w;
@@ -383,8 +388,6 @@ struct llama_server_context {
             if (ga_n != 1) {
                 GGML_ASSERT(ga_n > 0                    && "ga_n must be positive");                       // NOLINT
                 GGML_ASSERT(ga_w % ga_n == 0            && "ga_w must be a multiple of ga_n");             // NOLINT
-                //GGML_ASSERT(n_ctx_train % ga_w == 0     && "n_ctx_train must be a multiple of ga_w");    // NOLINT
-                //GGML_ASSERT(n_ctx >= n_ctx_train * ga_n && "n_ctx must be at least n_ctx_train * ga_n"); // NOLINT
                 LOG_TEE(" -> Slot %i - self-extend: ga_n = %d, ga_w = %d\n", slot.id, ga_n, ga_w);
             }
 
