@@ -90,16 +90,6 @@ ifeq ($(UNAME_S),Linux)
 	MK_CPPFLAGS += -D_GNU_SOURCE
 endif
 
-# RLIMIT_MEMLOCK came in BSD, is not specified in POSIX.1,
-# and on macOS its availability depends on enabling Darwin extensions
-# similarly on DragonFly, enabling BSD extensions is necessary
-ifeq ($(UNAME_S),Darwin)
-	MK_CPPFLAGS += -D_DARWIN_C_SOURCE
-endif
-ifeq ($(UNAME_S),DragonFly)
-	MK_CPPFLAGS += -D__BSD_VISIBLE
-endif
-
 # alloca is a non-standard interface that is not visible on BSDs when
 # POSIX conformance is specified, but not all of them provide a clean way
 # to enable it in such cases
@@ -113,17 +103,7 @@ ifeq ($(UNAME_S),OpenBSD)
 	MK_CPPFLAGS += -D_BSD_SOURCE
 endif
 
-ifdef LLAMA_DEBUG
-	MK_CFLAGS   += -O0 -g
-	MK_CXXFLAGS += -O0 -g
-	MK_LDFLAGS  += -g
-
-	ifeq ($(UNAME_S),Linux)
-		MK_CXXFLAGS += -Wp,-D_GLIBCXX_ASSERTIONS
-	endif
-else
-	MK_CPPFLAGS += -DNDEBUG
-endif
+MK_CPPFLAGS += -DNDEBUG
 
 ifdef LLAMA_SANITIZE_THREAD
 	MK_CFLAGS   += -fsanitize=thread -g
@@ -168,7 +148,6 @@ ifneq '' '$(findstring dyld-1015.7,$(shell $(CC) $(LDFLAGS) -Wl,-v 2>&1))'
 endif
 
 # OS specific
-# TODO: support Windows
 ifneq '' '$(filter $(UNAME_S),Linux Darwin FreeBSD NetBSD OpenBSD Haiku)'
 	MK_CFLAGS   += -pthread
 	MK_CXXFLAGS += -pthread
@@ -233,40 +212,6 @@ ifneq '' '$(findstring mingw,$(shell $(CC) -dumpmachine))'
 
 	# Target Windows 8 for PrefetchVirtualMemory
 	MK_CPPFLAGS += -D_WIN32_WINNT=0x602
-endif
-
-ifneq ($(filter aarch64%,$(UNAME_M)),)
-	# Apple M1, M2, etc.
-	# Raspberry Pi 3, 4, Zero 2 (64-bit)
-	# Nvidia Jetson
-	MK_CFLAGS   += -mcpu=native
-	MK_CXXFLAGS += -mcpu=native
-	JETSON_RELEASE_INFO = $(shell jetson_release)
-	ifdef JETSON_RELEASE_INFO
-		ifneq ($(filter TX2%,$(JETSON_RELEASE_INFO)),)
-			JETSON_EOL_MODULE_DETECT = 1
-			CC = aarch64-unknown-linux-gnu-gcc
-			cxx = aarch64-unknown-linux-gnu-g++
-		endif
-	endif
-endif
-
-ifneq ($(filter armv6%,$(UNAME_M)),)
-	# Raspberry Pi 1, Zero
-	MK_CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
-	MK_CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
-endif
-
-ifneq ($(filter armv7%,$(UNAME_M)),)
-	# Raspberry Pi 2
-	MK_CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
-	MK_CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
-endif
-
-ifneq ($(filter armv8%,$(UNAME_M)),)
-	# Raspberry Pi 3, 4, Zero 2 (32-bit)
-	MK_CFLAGS   += -mfp16-format=ieee -mno-unaligned-access
-	MK_CXXFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
 
 ifneq ($(filter ppc64%,$(UNAME_M)),)
