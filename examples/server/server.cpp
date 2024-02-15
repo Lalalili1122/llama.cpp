@@ -31,8 +31,7 @@
 
 using json = nlohmann::json;
 
-struct server_params
-{
+struct server_params {
     std::string hostname = "127.0.0.1";
     std::vector<std::string> api_keys;
     std::string public_path = "examples/server/public";
@@ -44,40 +43,29 @@ struct server_params
 
 bool server_verbose = false;
 
-static size_t common_part(const std::vector<llama_token> &a, const std::vector<llama_token> &b)
-{
+static size_t common_part(const std::vector<llama_token> &a, const std::vector<llama_token> &b) {
     size_t i;
-    for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++)
-    {
-    }
+    for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) { }
     return i;
 }
 
-enum stop_type
-{
+enum stop_type {
     STOP_FULL,
     STOP_PARTIAL,
 };
 
-static bool ends_with(const std::string &str, const std::string &suffix)
-{
+static bool ends_with(const std::string &str, const std::string &suffix) {
     return str.size() >= suffix.size() &&
            0 == str.compare(str.size() - suffix.size(), suffix.size(), suffix);
 }
 
-static size_t find_partial_stop_string(const std::string &stop,
-                                       const std::string &text)
-{
-    if (!text.empty() && !stop.empty())
-    {
+static size_t find_partial_stop_string(const std::string &stop, const std::string &text) {
+    if (!text.empty() && !stop.empty()) {
         const char text_last_char = text.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--)
-        {
-            if (stop[char_index] == text_last_char)
-            {
+        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
+            if (stop[char_index] == text_last_char) {
                 const std::string current_partial = stop.substr(0, char_index + 1);
-                if (ends_with(text, current_partial))
-                {
+                if (ends_with(text, current_partial)) {
                     return text.size() - char_index - 1;
                 }
             }
@@ -88,24 +76,20 @@ static size_t find_partial_stop_string(const std::string &stop,
 
 // TODO: reuse llama_detokenize
 template <class Iter>
-static std::string tokens_to_str(llama_context *ctx, Iter begin, Iter end)
-{
+static std::string tokens_to_str(llama_context *ctx, Iter begin, Iter end) {
     std::string ret;
-    for (; begin != end; ++begin)
-    {
+    for (; begin != end; ++begin) {
         ret += llama_token_to_piece(ctx, *begin);
     }
     return ret;
 }
 
 // format incomplete utf-8 multibyte character for output
-static std::string tokens_to_output_formatted_string(const llama_context *ctx, const llama_token token)
-{
+static std::string tokens_to_output_formatted_string(const llama_context *ctx, const llama_token token) {
     std::string out = token == -1 ? "" : llama_token_to_piece(ctx, token);
     // if the size is 1 and first bit is 1, meaning it's a partial character
     //   (size > 1 meaning it's already a known token)
-    if (out.size() == 1 && (out[0] & 0x80) == 0x80)
-    {
+    if (out.size() == 1 && (out[0] & 0x80) == 0x80) {
         std::stringstream ss;
         ss << std::hex << (out[0] & 0xff);
         std::string res(ss.str());
@@ -115,17 +99,13 @@ static std::string tokens_to_output_formatted_string(const llama_context *ctx, c
 }
 
 // convert a vector of completion_token_output to json
-static json probs_vector_to_json(const llama_context *ctx, const std::vector<completion_token_output> &probs)
-{
+static json probs_vector_to_json(const llama_context *ctx, const std::vector<completion_token_output> &probs) {
     json out = json::array();
-    for (const auto &prob : probs)
-    {
+    for (const auto &prob : probs) {
         json probs_for_token = json::array();
-        for (const auto &p : prob.probs)
-        {
+        for (const auto &p : prob.probs) {
             std::string tok_str = tokens_to_output_formatted_string(ctx, p.tok);
-            probs_for_token.push_back(json
-            {
+            probs_for_token.push_back(json {
                 {"tok_str", tok_str},
                 {"prob",    p.prob},
             });
@@ -139,8 +119,7 @@ static json probs_vector_to_json(const llama_context *ctx, const std::vector<com
     return out;
 }
 
-struct llama_client_slot
-{
+struct llama_client_slot {
     int id;
     int task_id = -1;
 
@@ -224,8 +203,7 @@ struct llama_client_slot
 
         generated_token_probs.clear();
 
-        for (slot_image & img : images)
-        {
+        for (slot_image & img : images) {
             free(img.image_embedding);
             if (img.img_data) {
                 clip_image_u8_free(img.img_data);
@@ -237,19 +215,15 @@ struct llama_client_slot
     }
 
     bool has_budget(gpt_params &global_params) {
-        if (params.n_predict == -1 && global_params.n_predict == -1)
-        {
+        if (params.n_predict == -1 && global_params.n_predict == -1) {
             return true; // limitless
         }
 
         n_remaining = -1;
 
-        if (params.n_predict != -1)
-        {
+        if (params.n_predict != -1) {
             n_remaining = params.n_predict - n_decoded;
-        }
-        else if (global_params.n_predict != -1)
-        {
+        } else if (global_params.n_predict != -1) {
             n_remaining = global_params.n_predict - n_decoded;
         }
 
@@ -265,8 +239,7 @@ struct llama_client_slot
     }
 
     void add_token_string(const completion_token_output &token) {
-        if (command == RELEASE)
-        {
+        if (command == RELEASE) {
             return;
         }
         cache_tokens.push_back(token.tok);
@@ -274,8 +247,7 @@ struct llama_client_slot
     }
 
     void release() {
-        if (state == PROCESSING)
-        {
+        if (state == PROCESSING) {
             t_token_generation = (ggml_time_us() - t_start_genereration) / 1e3;
             command = RELEASE;
         }
@@ -306,8 +278,7 @@ struct llama_client_slot
     }
 };
 
-struct llama_server_context
-{
+struct llama_server_context {
     llama_model *model = nullptr;
     llama_context *ctx = nullptr;
 
@@ -340,22 +311,18 @@ struct llama_server_context
     llama_server_queue queue_tasks;
     llama_server_response queue_results;
 
-    ~llama_server_context()
-    {
-        if (ctx)
-        {
+    ~llama_server_context() {
+        if (ctx) {
             llama_free(ctx);
             ctx = nullptr;
         }
-        if (model)
-        {
+        if (model) {
             llama_free_model(model);
             model = nullptr;
         }
     }
 
-    bool load_model(const gpt_params &params_)
-    {
+    bool load_model(const gpt_params &params_) {
         params = params_;
         if (!params.mmproj.empty()) {
             multimodal = true;
@@ -372,8 +339,7 @@ struct llama_server_context
         }
 
         std::tie(model, ctx) = llama_init_from_gpt_params(params);
-        if (model == nullptr)
-        {
+        if (model == nullptr) {
             LOG_ERROR("unable to load model", {{"model", params.model}});
             return false;
         }
@@ -403,8 +369,7 @@ struct llama_server_context
         const int32_t n_ctx_slot = n_ctx / params.n_parallel;
 
         LOG_TEE("Available slots:\n");
-        for (int i = 0; i < params.n_parallel; i++)
-        {
+        for (int i = 0; i < params.n_parallel; i++) {
             llama_client_slot slot;
 
             slot.id = i;
@@ -416,8 +381,8 @@ struct llama_server_context
             const int ga_w = params.grp_attn_w;
 
             if (ga_n != 1) {
-                GGML_ASSERT(ga_n > 0                    && "ga_n must be positive");                     // NOLINT
-                GGML_ASSERT(ga_w % ga_n == 0            && "ga_w must be a multiple of ga_n");     // NOLINT
+                GGML_ASSERT(ga_n > 0                    && "ga_n must be positive");                       // NOLINT
+                GGML_ASSERT(ga_w % ga_n == 0            && "ga_w must be a multiple of ga_n");             // NOLINT
                 //GGML_ASSERT(n_ctx_train % ga_w == 0     && "n_ctx_train must be a multiple of ga_w");    // NOLINT
                 //GGML_ASSERT(n_ctx >= n_ctx_train * ga_n && "n_ctx must be at least n_ctx_train * ga_n"); // NOLINT
                 LOG_TEE(" -> Slot %i - self-extend: ga_n = %d, ga_w = %d\n", slot.id, ga_n, ga_w);
@@ -442,8 +407,7 @@ struct llama_server_context
         system_tokens.clear();
     }
 
-    std::vector<llama_token> tokenize(const json & json_prompt, bool add_bos) const
-    {
+    std::vector<llama_token> tokenize(const json & json_prompt, bool add_bos) const {
         // TODO: currently, we tokenize using special tokens by default
         //       this is not always correct (see https://github.com/ggerganov/llama.cpp/pull/4160#issuecomment-1824826216)
         //       but it's better compared to completely ignoring ChatML and other chat templates
@@ -453,38 +417,28 @@ struct llama_server_context
         // or the first element of the json_prompt array is a string.
         std::vector<llama_token> prompt_tokens;
 
-        if (json_prompt.is_array())
-        {
+        if (json_prompt.is_array()) {
             bool first = true;
-            for (const auto& p : json_prompt)
-            {
-                if (p.is_string())
-                {
+            for (const auto& p : json_prompt) {
+                if (p.is_string()) {
                     auto s = p.template get<std::string>();
                     std::vector<llama_token> p;
-                    if (first)
-                    {
+                    if (first) {
                         p = ::llama_tokenize(ctx, s, add_bos, TMP_FORCE_SPECIAL);
                         first = false;
-                    }
-                    else
-                    {
+                    } else {
                         p = ::llama_tokenize(ctx, s, false, TMP_FORCE_SPECIAL);
                     }
                     prompt_tokens.insert(prompt_tokens.end(), p.begin(), p.end());
-                }
-                else
-                {
-                    if (first)
-                    {
+                } else {
+                    if (first) {
                         first = false;
                     }
                     prompt_tokens.push_back(p.template get<llama_token>());
                 }
             }
         }
-        else
-        {
+        else {
             auto s = json_prompt.template get<std::string>();
             prompt_tokens = ::llama_tokenize(ctx, s, add_bos, TMP_FORCE_SPECIAL);
         }
@@ -496,15 +450,12 @@ struct llama_server_context
         int64_t t_last = ggml_time_us();
         llama_client_slot *last_used = nullptr;
 
-        for (llama_client_slot & slot : slots)
-        {
-            if (slot.id == id && slot.available())
-            {
+        for (llama_client_slot & slot : slots) {
+            if (slot.id == id && slot.available()) {
                 return &slot;
             }
 
-            if (slot.available() && slot.t_last_used < t_last)
-            {
+            if (slot.available() && slot.t_last_used < t_last) {
                 last_used = &slot;
                 t_last = slot.t_last_used;
             }
@@ -550,40 +501,29 @@ struct llama_server_context
         slot->sparams.n_probs           = json_value(data, "n_probs",           default_sparams.n_probs);
 
         // infill
-        if (data.count("input_prefix") != 0)
-        {
+        if (data.count("input_prefix") != 0) {
             slot->params.input_prefix = data["input_prefix"];
-        }
-        else
-        {
+        } else {
             slot->params.input_prefix = "";
         }
 
-        if (data.count("input_suffix") != 0)
-        {
+        if (data.count("input_suffix") != 0) {
             slot->params.input_suffix = data["input_suffix"];
-        }
-        else
-        {
+        } else {
             slot->params.input_suffix = "";
         }
 
-        if (data.count("prompt") != 0)
-        {
+        if (data.count("prompt") != 0) {
             slot->prompt = data["prompt"];
-        }
-        else
-        {
+        } else {
             slot->prompt = "";
         }
 
         slot->sparams.penalty_prompt_tokens.clear();
         slot->sparams.use_penalty_prompt_tokens = false;
         const auto &penalty_prompt = data.find("penalty_prompt");
-        if (penalty_prompt != data.end())
-        {
-            if (penalty_prompt->is_string())
-            {
+        if (penalty_prompt != data.end()) {
+            if (penalty_prompt->is_string()) {
                 const auto penalty_prompt_string = penalty_prompt->get<std::string>();
                 auto penalty_tokens = llama_tokenize(model, penalty_prompt_string, false);
                 slot->sparams.penalty_prompt_tokens.swap(penalty_tokens);
@@ -593,18 +533,14 @@ struct llama_server_context
                 }
                 slot->sparams.use_penalty_prompt_tokens = true;
             }
-            else if (penalty_prompt->is_array())
-            {
+            else if (penalty_prompt->is_array()) {
                 const auto n_tokens = penalty_prompt->size();
                 slot->sparams.penalty_prompt_tokens.reserve(n_tokens + std::max(0, slot->params.n_predict));
                 const int n_vocab = llama_n_vocab(model);
-                for (const auto &penalty_token : *penalty_prompt)
-                {
-                    if (penalty_token.is_number_integer())
-                    {
+                for (const auto &penalty_token : *penalty_prompt) {
+                    if (penalty_token.is_number_integer()) {
                         const auto tok = penalty_token.get<llama_token>();
-                        if (tok >= 0 && tok < n_vocab)
-                        {
+                        if (tok >= 0 && tok < n_vocab) {
                             slot->sparams.penalty_prompt_tokens.push_back(tok);
                         }
                     }
@@ -615,46 +551,33 @@ struct llama_server_context
 
         slot->sparams.logit_bias.clear();
 
-        if (json_value(data, "ignore_eos", false))
-        {
+        if (json_value(data, "ignore_eos", false)) {
             slot->sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
         }
 
         const auto &logit_bias = data.find("logit_bias");
-        if (logit_bias != data.end() && logit_bias->is_array())
-        {
+        if (logit_bias != data.end() && logit_bias->is_array()) {
             const int n_vocab = llama_n_vocab(model);
-            for (const auto &el : *logit_bias)
-            {
-                if (el.is_array() && el.size() == 2)
-                {
+            for (const auto &el : *logit_bias) {
+                if (el.is_array() && el.size() == 2) {
                     float bias;
-                    if (el[1].is_number())
-                    {
+                    if (el[1].is_number()) {
                         bias = el[1].get<float>();
-                    }
-                    else if (el[1].is_boolean() && !el[1].get<bool>())
-                    {
+                    } else if (el[1].is_boolean() && !el[1].get<bool>()) {
                         bias = -INFINITY;
-                    }
-                    else
-                    {
+                    } else {
                         continue;
                     }
 
-                    if (el[0].is_number_integer())
-                    {
+                    if (el[0].is_number_integer()) {
                         llama_token tok = el[0].get<llama_token>();
                         if (tok >= 0 && tok < n_vocab)
                         {
                             slot->sparams.logit_bias[tok] = bias;
                         }
-                    }
-                    else if (el[0].is_string())
-                    {
+                    } else if (el[0].is_string()) {
                         auto toks = llama_tokenize(model, el[0].get<std::string>(), false);
-                        for (auto tok : toks)
-                        {
+                        for (auto tok : toks) {
                             slot->sparams.logit_bias[tok] = bias;
                         }
                     }
@@ -665,12 +588,9 @@ struct llama_server_context
         slot->params.antiprompt.clear();
 
         const auto &stop = data.find("stop");
-        if (stop != data.end() && stop->is_array())
-        {
-            for (const auto &word : *stop)
-            {
-                if (!word.empty())
-                {
+        if (stop != data.end() && stop->is_array()) {
+            for (const auto &word : *stop) {
+                if (!word.empty()) {
                     slot->params.antiprompt.push_back(word);
                 }
             }
