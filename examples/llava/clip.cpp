@@ -616,9 +616,9 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             KQ = ggml_soft_max_inplace(ctx0, KQ);
             struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
             KQV = ggml_reshape_4d(ctx0, KQV, d_head, num_positions, n_head, batch_size);
-            KQV = ggml_cont(ctx0, ggml_permute(ctx0, KQV, 0, 2, 1, 3));
+            KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
 
-            cur = ggml_cpy(ctx0, KQV, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, num_positions, batch_size));
+            cur = ggml_cont_3d(ctx0, KQV, hidden_size, num_positions, batch_size);
         }
 
         // attention output
@@ -1103,7 +1103,7 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             printf("v_image_mean       %f %f %f\n", new_clip->image_mean[0], new_clip->image_mean[1], new_clip->image_mean[2]);
             printf("v_image_std        %f %f %f\n", new_clip->image_std[0], new_clip->image_std[1], new_clip->image_std[2]);
             printf("v_image_grid_pinpoints: ");
-            for (int i = 0; i < 32 & hparams.image_grid_pinpoints[i]!=0; ++i) {
+            for (int i = 0; i < 32 && (hparams.image_grid_pinpoints[i] != 0); ++i) {
                 printf("%d ", hparams.image_grid_pinpoints[i]);
             }
             printf("\n");
