@@ -9,11 +9,7 @@
 
 #include "stb_image.h"
 
-#ifndef NDEBUG
-// crash the server in debug mode, otherwise send an http 500 error
-#define CPPHTTPLIB_NO_EXCEPTIONS 1
 #define CPPHTTPLIB_OPENSSL_SUPPORT
-#endif
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
 #include "httplib.h"
@@ -2755,7 +2751,7 @@ int main(int argc, char **argv)
                                 {"system_info", llama_print_system_info()},
                             });
 
-    httplib::Server svr;
+    httplib::SSLServer svr("", "");
 
     std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
 
