@@ -12,6 +12,7 @@
 #ifndef NDEBUG
 // crash the server in debug mode, otherwise send an http 500 error
 #define CPPHTTPLIB_NO_EXCEPTIONS 1
+#define CPPHTTPLIB_OPENSSL_SUPPORT
 #endif
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
@@ -2634,12 +2635,6 @@ int main(int argc, char **argv)
     svr.set_read_timeout (sparams.read_timeout);
     svr.set_write_timeout(sparams.write_timeout);
 
-    if (!svr.bind_to_port(sparams.hostname, sparams.port))
-    {
-        fprintf(stderr, "\ncouldn't bind to server socket: hostname=%s port=%d\n\n", sparams.hostname.c_str(), sparams.port);
-        return 1;
-    }
-
     // Set the base directory for serving static files
     svr.set_base_dir(sparams.public_path);
 
@@ -2658,16 +2653,22 @@ int main(int argc, char **argv)
 
     LOG_INFO("HTTP server listening", log_data);
     // run the HTTP server in a thread - see comment below
-    std::thread t([&]()
-            {
-                if (!svr.listen_after_bind())
-                {
-                    state.store(SERVER_STATE_ERROR);
-                    return 1;
-                }
-
-                return 0;
-            });
+    std::thread t([&]() {
+        std::string cert_path = "path/to/your/cert.pem";
+        std::string key_path = "path/to/your/key.pem";
+        
+        if (svr.bind_to_port(sparams.hostname, sparams.port)) {
+            if (!svr.listen(sparams.hostname, sparams.port, cert_path.c_str(), key_path.c_str())) {
+                state.store(SERVER_STATE_ERROR);
+                return 1;
+            }
+        } else {
+            fprintf(stderr, "\ncouldn't bind to server socket: hostname=%s port=%d\n\n", sparams.hostname.c_str(), sparams.port);
+            state.store(SERVER_STATE_ERROR);
+            return 1;
+        }
+        return 0;
+    });
 
     // load the model
     if (!llama.load_model(params))
