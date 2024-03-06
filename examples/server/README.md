@@ -1,11 +1,24 @@
-# llama.cpp/example/server
+# LLaMA.cpp HTTP Server
 
-This example demonstrates a simple HTTP API server and a simple web front end to interact with llama.cpp.
+Fast, lightweight, pure C/C++ HTTP server based on [httplib](https://github.com/yhirose/cpp-httplib), [nlohmann::json](https://github.com/nlohmann/json) and **llama.cpp**.
 
-Command line options:
+Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
+
+**Features:**
+ * LLM inference of F16 and quantum models on GPU and CPU
+ * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
+ * Parallel decoding with multi-user support
+ * Continuous batching
+ * Multimodal (wip)
+ * Monitoring endpoints
+
+The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggerganov/llama.cpp/issues/4216).
+
+**Command line options:**
 
 - `--threads N`, `-t N`: Set the number of threads to use during generation.
 - `-tb N, --threads-batch N`: Set the number of threads to use during batch and prompt processing. If not specified, the number of threads will be set to the number of threads used for generation.
+- `--threads-http N`: number of threads in the http server pool to process requests (default: `max(std::thread::hardware_concurrency() - 1, --parallel N + 2)`)
 - `-m FNAME`, `--model FNAME`: Specify the path to the LLaMA model file (e.g., `models/7B/ggml-model.gguf`).
 - `-a ALIAS`, `--alias ALIAS`: Set an alias for the model. The alias will be returned in API responses.
 - `-c N`, `--ctx-size N`: Set the size of the prompt context. The default is 512, but LLaMA models were built with a context of 2048, which will provide better results for longer input/inference. The size may differ in other models, for example, baichuan models were build with a context of 4096.
@@ -39,9 +52,12 @@ see https://github.com/ggerganov/llama.cpp/issues/1437
 - `--mmproj MMPROJ_FILE`: Path to a multimodal projector file for LLaVA.
 - `--grp-attn-n`: Set the group attention factor to extend context size through self-extend(default: 1=disabled), used together with group attention width `--grp-attn-w`
 - `--grp-attn-w`: Set the group attention width to extend context size through self-extend(default: 512), used together with group attention factor `--grp-attn-n`
-- `-n, --n-predict`: Set the maximum tokens to predict (default: -1)
+- `-n N, --n-predict N`: Set the maximum tokens to predict (default: -1)
 - `--slots-endpoint-disable`: To disable slots state monitoring endpoint. Slots state may contain user data, prompts included.
+- `--metrics`: enable prometheus `/metrics` compatible endpoint (default: disabled)
 - `--chat-template JINJA_TEMPLATE`: Set custom jinja chat template. This parameter accepts a string, not a file name (default: template taken from model's metadata). We only support [some pre-defined templates](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template)
+- `--log-disable`: Output logs to stdout only, default: enabled.
+- `--log-format FORMAT`: Define the log output to FORMAT: json or text (default: json)
 
 ## Build
 
@@ -97,6 +113,12 @@ curl --request POST \
     --header "Content-Type: application/json" \
     --data '{"prompt": "Building a website can be done in 10 simple steps:","n_predict": 128}'
 ```
+
+## Advanced testing
+
+We implemented a [server test framework](./tests/README.md) using human-readable scenario.
+
+*Before submitting an issue, please try to reproduce it with this format.*
 
 ## Node JS Test
 
@@ -304,7 +326,7 @@ Notice that each `probs` is an array of length `n_probs`.
 - `default_generation_settings` - the default generation settings for the `/completion` endpoint, has the same fields as the `generation_settings` response object from the `/completion` endpoint.
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 
-- **POST** `/v1/chat/completions`: OpenAI-compatible Chat Completions API. Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only ChatML-tuned models, such as Dolphin, OpenOrca, OpenHermes, OpenChat-3.5, etc can be used with this endpoint. Compared to `api_like_OAI.py` this API implementation does not require a wrapper to be served.
+- **POST** `/v1/chat/completions`: OpenAI-compatible Chat Completions API. Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only ChatML-tuned models, such as Dolphin, OpenOrca, OpenHermes, OpenChat-3.5, etc can be used with this endpoint.
 
     *Options:*
 
@@ -451,6 +473,18 @@ Notice that each `probs` is an array of length `n_probs`.
 ]
 ```
 
+- **GET** `/metrics`: [Prometheus](https://prometheus.io/) compatible metrics exporter endpoint if `--metrics` is enabled:
+
+Available metrics:
+- `llamacpp:prompt_tokens_total`: Number of prompt tokens processed.
+- `llamacpp:tokens_predicted_total`: Number of generation tokens processed.
+- `llamacpp:prompt_tokens_seconds`: Average prompt throughput in tokens/s.
+- `llamacpp:predicted_tokens_seconds`: Average generation throughput in tokens/s.
+- `llamacpp:kv_cache_usage_ratio`: KV-cache usage. 1 means 100 percent usage.
+- `llamacpp:kv_cache_tokens`: KV-cache tokens.
+- `llamacpp:requests_processing`: Number of request processing.
+- `llamacpp:requests_deferred`: Number of request deferred.
+
 ## More examples
 
 ### Change system prompt on runtime
@@ -494,20 +528,7 @@ bash chat.sh
 
 ### API like OAI
 
-API example using Python Flask: [api_like_OAI.py](api_like_OAI.py)
-This example must be used with server.cpp
-
-```sh
-python api_like_OAI.py
-```
-
-After running the API server, you can use it in Python by setting the API base URL.
-
-```python
-openai.api_base = "http://<Your api-server IP>:port"
-```
-
-Then you can utilize llama.cpp as an OpenAI's **chat.completion** or **text_completion** API
+The HTTP server supports OAI-like API
 
 ### Extending or building alternative Web Front End
 

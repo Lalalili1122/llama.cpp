@@ -315,13 +315,17 @@
 extern "C" {
 #endif
 
-#if defined(__ARM_NEON) && defined(__CUDACC__)
-    typedef half ggml_fp16_t;
-#elif defined(__ARM_NEON) && !defined(_MSC_VER)
-    typedef __fp16 ggml_fp16_t;
-#else
+    enum ggml_status {
+        GGML_STATUS_ALLOC_FAILED = -2,
+        GGML_STATUS_FAILED = -1,
+        GGML_STATUS_SUCCESS = 0,
+        GGML_STATUS_ABORTED = 1,
+    };
+
+    // get ggml_status name string
+    GGML_API GGML_CALL const char * ggml_status_to_string(enum ggml_status status);
+
     typedef uint16_t ggml_fp16_t;
-#endif
 
     // convert FP16 <-> FP32
     GGML_API float       ggml_fp16_to_fp32(ggml_fp16_t x);
@@ -356,6 +360,9 @@ extern "C" {
         GGML_TYPE_IQ3_XXS = 18,
         GGML_TYPE_IQ1_S   = 19,
         GGML_TYPE_IQ4_NL  = 20,
+        GGML_TYPE_IQ3_S   = 21,
+        GGML_TYPE_IQ2_S   = 22,
+        GGML_TYPE_IQ4_XS  = 23,
         GGML_TYPE_I8,
         GGML_TYPE_I16,
         GGML_TYPE_I32,
@@ -369,9 +376,9 @@ extern "C" {
     };
 
     enum ggml_backend_type {
-        GGML_BACKEND_CPU = 0,
-        GGML_BACKEND_GPU = 10,
-        GGML_BACKEND_GPU_SPLIT = 20,
+        GGML_BACKEND_TYPE_CPU = 0,
+        GGML_BACKEND_TYPE_GPU = 10,
+        GGML_BACKEND_TYPE_GPU_SPLIT = 20,
     };
 
     // model file types
@@ -395,6 +402,9 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ3_XXS = 17, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_S   = 18, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_NL  = 19, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ3_S   = 20, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_S   = 21, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ4_XS  = 22, // except 1d tensors
     };
 
     // available tensor operations:
@@ -454,6 +464,8 @@ extern "C" {
         GGML_OP_POOL_2D,
         GGML_OP_UPSCALE, // nearest interpolate
         GGML_OP_PAD,
+        GGML_OP_ARANGE,
+        GGML_OP_TIMESTEP_EMBEDDING,
         GGML_OP_ARGSORT,
         GGML_OP_LEAKY_RELU,
 
@@ -502,9 +514,9 @@ extern "C" {
     };
 
     enum ggml_object_type {
-        GGML_OBJECT_TENSOR,
-        GGML_OBJECT_GRAPH,
-        GGML_OBJECT_WORK_BUFFER
+        GGML_OBJECT_TYPE_TENSOR,
+        GGML_OBJECT_TYPE_GRAPH,
+        GGML_OBJECT_TYPE_WORK_BUFFER
     };
 
     enum ggml_log_level {
@@ -646,9 +658,9 @@ extern "C" {
     // NOTE: the INIT or FINALIZE pass is not scheduled unless explicitly enabled.
     // This behavior was changed since https://github.com/ggerganov/llama.cpp/pull/1995.
     enum ggml_task_type {
-        GGML_TASK_INIT = 0,
-        GGML_TASK_COMPUTE,
-        GGML_TASK_FINALIZE,
+        GGML_TASK_TYPE_INIT = 0,
+        GGML_TASK_TYPE_COMPUTE,
+        GGML_TASK_TYPE_FINALIZE,
     };
 
     struct ggml_compute_params {
@@ -671,6 +683,16 @@ extern "C" {
         GGML_NUMA_STRATEGY_MIRROR     = 4,
         GGML_NUMA_STRATEGY_COUNT
     };
+
+    //
+    // GUID
+    //
+
+    // GUID types
+    typedef uint8_t ggml_guid[16];
+    typedef ggml_guid * ggml_guid_t;
+
+    GGML_API bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b);
 
     // misc
 
@@ -1651,16 +1673,31 @@ extern "C" {
             int                  p2,
             int                  p3);
 
+    // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
+    // timesteps: [N,]
+    // return: [N, dim]
+    GGML_API struct ggml_tensor * ggml_timestep_embedding(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * timesteps,
+            int                   dim,
+            int                   max_period);
+
     // sort rows
     enum ggml_sort_order {
-        GGML_SORT_ASC,
-        GGML_SORT_DESC,
+        GGML_SORT_ORDER_ASC,
+        GGML_SORT_ORDER_DESC,
     };
 
     GGML_API struct ggml_tensor * ggml_argsort(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             enum ggml_sort_order  order);
+
+    GGML_API struct ggml_tensor * ggml_arange(
+            struct ggml_context * ctx,
+            float                 start,
+            float                 stop,
+            float                 step);
 
     // top k elements per row
     GGML_API struct ggml_tensor * ggml_top_k(
@@ -1913,12 +1950,11 @@ extern "C" {
 
     // ggml_graph_plan() has to be called before ggml_graph_compute()
     // when plan.work_size > 0, caller must allocate memory for plan.work_data
-    GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
-    GGML_API int               ggml_graph_compute(      struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
-
+    GGML_API struct ggml_cplan ggml_graph_plan            (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
+    GGML_API enum ggml_status  ggml_graph_compute         (      struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
     // same as ggml_graph_compute() but the work data is allocated as a part of the context
     // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
-    GGML_API void ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
+    GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
 
     GGML_API struct ggml_tensor * ggml_graph_get_tensor(struct ggml_cgraph * cgraph, const char * name);
 
@@ -1947,8 +1983,8 @@ extern "C" {
 
     // optimization methods
     enum ggml_opt_type {
-        GGML_OPT_ADAM,
-        GGML_OPT_LBFGS,
+        GGML_OPT_TYPE_ADAM,
+        GGML_OPT_TYPE_LBFGS,
     };
 
     // linesearch methods
@@ -1962,12 +1998,12 @@ extern "C" {
 
     // optimization return values
     enum ggml_opt_result {
-        GGML_OPT_OK = 0,
-        GGML_OPT_DID_NOT_CONVERGE,
-        GGML_OPT_NO_CONTEXT,
-        GGML_OPT_INVALID_WOLFE,
-        GGML_OPT_FAIL,
-        GGML_OPT_CANCEL,
+        GGML_OPT_RESULT_OK = 0,
+        GGML_OPT_RESULT_DID_NOT_CONVERGE,
+        GGML_OPT_RESULT_NO_CONTEXT,
+        GGML_OPT_RESULT_INVALID_WOLFE,
+        GGML_OPT_RESULT_FAIL,
+        GGML_OPT_RESULT_CANCEL,
 
         GGML_LINESEARCH_FAIL = -128,
         GGML_LINESEARCH_MINIMUM_STEP,
