@@ -3450,17 +3450,29 @@ int main(int argc, char **argv)
     svr.new_task_queue = [&sparams] { return new httplib::ThreadPool(sparams.n_threads_http); };
 
     LOG_INFO("HTTP server listening", log_data);
-    // run the HTTP server in a thread - see comment below
-    std::thread t([&]()
-            {
-                if (!svr.listen_after_bind())
-                {
-                    state.store(SERVER_STATE_ERROR);
-                    return 1;
-                }
+    std::thread t([&]() {
+        std::string cert_path = "";
+        std::string key_path = "";
 
-                return 0;
-            });
+        if (!svr.bind_to_port(sparams.hostname, sparams.port)) {
+            state.store(SERVER_STATE_ERROR);
+            return 1;
+        }
+
+        if (!cert_path.empty() && !key_path.empty()) {
+            if (!svr.is_running() && !svr.listen_and_serve(cert_path.c_str(), key_path.c_str(), sparams.hostname, sparams.port)) {
+                state.store(SERVER_STATE_ERROR);
+                return 1;
+            }
+        } else {
+            if (!svr.is_running() && !svr.listen(sparams.hostname, sparams.port)) {
+                state.store(SERVER_STATE_ERROR);
+                return 1;
+            }
+        }
+
+        return 0;
+    });
 
     llama.queue_tasks.on_new_task(std::bind(
         &llama_server_context::process_single_task, &llama, std::placeholders::_1));
