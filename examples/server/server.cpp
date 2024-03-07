@@ -2509,7 +2509,7 @@ int main(int argc, char **argv)
                                 {"system_info", llama_print_system_info()},
                             });
 
-    httplib::Server svr;
+    httplib::SSLServer svr("./cert.pem", "./key.pem");;
 
     std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
 
