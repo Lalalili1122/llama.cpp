@@ -1,6 +1,7 @@
 #include "utils.hpp"
 
 #include "common.h"
+#include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "grammar-parser.h"
 
@@ -29,7 +30,7 @@
 #include <signal.h>
 #include <memory>
 
-using json = nlohmann::json;
+using json = nlohmann::ordered_json;
 
 bool server_verbose = false;
 bool server_log_json = true;
@@ -98,6 +99,7 @@ struct slot_params {
 
     uint32_t seed      = -1; // RNG seed
     int32_t  n_keep    =  0; // number of tokens to keep from initial prompt
+    int32_t  n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
     int32_t  n_predict = -1; // new tokens to predict
 
     std::vector<std::string> antiprompt;
@@ -147,7 +149,7 @@ struct server_slot {
     int32_t n_decoded   = 0;
     int32_t n_remaining = -1;
     int32_t i_batch     = -1;
-    int32_t n_predict   = -1;
+    int32_t n_predict   = -1; // TODO: disambiguate from params.n_predict
 
     int32_t n_prompt_tokens           = 0;
     int32_t n_prompt_tokens_processed = 0;
@@ -178,6 +180,7 @@ struct server_slot {
     llama_token sampled;
     struct llama_sampling_params sparams;
     llama_sampling_context * ctx_sampling = nullptr;
+    json json_schema;
 
     int32_t ga_i = 0;   // group-attention state
     int32_t ga_n = 1;   // group-attention factor
@@ -738,7 +741,14 @@ struct server_context {
         default_generation_settings_for_props = get_formated_generation(slots.front());
         default_generation_settings_for_props["seed"] = -1;
 
-        batch = llama_batch_init(n_ctx, 0, params.n_parallel);
+        // the update_slots() logic will always submit a maximum of n_batch tokens
+        // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
+        {
+            const int32_t n_batch = llama_n_batch(ctx);
+
+            // only a single seq_id per token is needed
+            batch = llama_batch_init(n_batch, 0, 1);
+        }
 
         metrics.init();
     }
@@ -837,10 +847,26 @@ struct server_context {
         slot.sparams.mirostat_eta      = json_value(data, "mirostat_eta",      default_sparams.mirostat_eta);
         slot.sparams.penalize_nl       = json_value(data, "penalize_nl",       default_sparams.penalize_nl);
         slot.params.n_keep             = json_value(data, "n_keep",            slot.params.n_keep);
+        slot.params.n_discard          = json_value(data, "n_discard",         default_params.n_discard);
         slot.params.seed               = json_value(data, "seed",              default_params.seed);
-        slot.sparams.grammar           = json_value(data, "grammar",           default_sparams.grammar);
         slot.sparams.n_probs           = json_value(data, "n_probs",           default_sparams.n_probs);
         slot.sparams.min_keep          = json_value(data, "min_keep",          default_sparams.min_keep);
+
+        // process "json_schema" and "grammar"
+        if (data.contains("json_schema") && data.contains("grammar")) {
+            send_error(task, "Either \"json_schema\" or \"grammar\" can be specified, but not both", ERROR_TYPE_INVALID_REQUEST);
+            return false;
+        } else if (data.contains("json_schema") && !data.contains("grammar")) {
+            try {
+                auto schema                = json_value(data, "json_schema", json::object());
+                slot.sparams.grammar       = json_schema_to_grammar(schema);
+            } catch (const std::exception & e) {
+                send_error(task, std::string("\"json_schema\": ") + e.what(), ERROR_TYPE_INVALID_REQUEST);
+                return false;
+            }
+        } else {
+            slot.sparams.grammar       = json_value(data, "grammar",           default_sparams.grammar);
+        }
 
         if (slot.params.cache_prompt && slot.ga_n != 1) {
             LOG_WARNING("cache_prompt is not supported with group-attention", {});
@@ -1035,8 +1061,10 @@ struct server_context {
                 llama_batch_add(batch, system_tokens[i], i, { 0 }, false);
             }
 
-            for (int32_t i = 0; i < (int32_t) batch.n_tokens; i += params.n_batch) {
-                const int32_t n_tokens = std::min(params.n_batch, (int32_t) (batch.n_tokens - i));
+            const int32_t n_batch = llama_n_batch(ctx);
+
+            for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
+                const int32_t n_tokens = std::min(params.n_batch, batch.n_tokens - i);
                 llama_batch batch_view = {
                     n_tokens,
                     batch.token    + i,
@@ -1225,8 +1253,9 @@ struct server_context {
             {"mirostat_eta",              slot.sparams.mirostat_eta},
             {"penalize_nl",               slot.sparams.penalize_nl},
             {"stop",                      slot.params.antiprompt},
-            {"n_predict",                 slot.params.n_predict},
-            {"n_keep",                    params.n_keep},
+            {"n_predict",                 slot.params.n_predict}, // TODO: fix duplicate key n_predict
+            {"n_keep",                    slot.params.n_keep},
+            {"n_discard",                 slot.params.n_discard},
             {"ignore_eos",                ignore_eos},
             {"stream",                    slot.params.stream},
             {"logit_bias",                slot.sparams.logit_bias},
@@ -1670,7 +1699,7 @@ struct server_context {
                     // Shift context
                     const int n_keep    = slot.params.n_keep + add_bos_token;
                     const int n_left    = (int) system_tokens.size() + slot.n_past - n_keep;
-                    const int n_discard = n_left / 2;
+                    const int n_discard = slot.params.n_discard ? slot.params.n_discard : (n_left / 2);
 
                     LOG_INFO("slot context shift", {
                         {"id_slot",         slot.id},
@@ -1737,7 +1766,8 @@ struct server_context {
         }
 
         // process in chunks of params.n_batch
-        int32_t n_batch = params.n_batch;
+        int32_t n_batch  = llama_n_batch(ctx);
+        int32_t n_ubatch = llama_n_ubatch(ctx);
 
         // next, batch any pending prompts without exceeding n_batch
         if (params.cont_batching || batch.n_tokens == 0) {
@@ -1810,7 +1840,7 @@ struct server_context {
 
                         if (slot.embedding) {
                             // this prompt is too large to process - discard it
-                            if (slot.n_prompt_tokens > n_batch) {
+                            if (slot.n_prompt_tokens > n_ubatch) {
                                 slot.state = SLOT_STATE_PROCESSING;
                                 slot.command = SLOT_COMMAND_NONE;
                                 slot.release();
@@ -2156,7 +2186,8 @@ static void server_print_usage(const char * argv0, const gpt_params & params, co
     printf("  --pooling {none,mean,cls} pooling type for embeddings, use model default if unspecified\n");
     printf("  -dt N, --defrag-thold N\n");
     printf("                            KV cache defragmentation threshold (default: %.1f, < 0 - disabled)\n", params.defrag_thold);
-    printf("  -b N, --batch-size N      batch size for prompt processing (default: %d)\n", params.n_batch);
+    printf("  -b N, --batch-size N      logical maximum batch size (default: %d)\n", params.n_batch);
+    printf("  -ub N, --ubatch-size N    physical maximum batch size (default: %d)\n", params.n_ubatch);
     printf("  --memory-f32              use f32 instead of f16 for memory key+value (default: disabled)\n");
     printf("                            not recommended: doubles context memory required and no measurable increase in quality\n");
     if (llama_supports_mlock()) {
@@ -2184,6 +2215,12 @@ static void server_print_usage(const char * argv0, const gpt_params & params, co
     }
     printf("  -m FNAME, --model FNAME\n");
     printf("                            model path (default: %s)\n", params.model.c_str());
+    printf("  -mu MODEL_URL, --model-url MODEL_URL\n");
+    printf("                            model download url (default: unused)\n");
+    printf("  -hfr REPO, --hf-repo REPO\n");
+    printf("                            Hugging Face model repository (default: unused)\n");
+    printf("  -hff FILE, --hf-file FILE\n");
+    printf("                            Hugging Face model file (default: unused)\n");
     printf("  -a ALIAS, --alias ALIAS\n");
     printf("                            set an alias for the model, will be added as `model` field in completion response\n");
     printf("  --lora FNAME              apply LoRA adapter (implies --no-mmap)\n");
@@ -2200,7 +2237,7 @@ static void server_print_usage(const char * argv0, const gpt_params & params, co
     printf("  -to N, --timeout N        server read/write timeout in seconds (default: %d)\n", sparams.read_timeout);
     printf("  --embeddings              enable embedding vector output (default: %s)\n", params.embedding ? "enabled" : "disabled");
     printf("  -np N, --parallel N       number of slots for process requests (default: %d)\n", params.n_parallel);
-    printf("  -cb, --cont-batching      enable continuous batching (a.k.a dynamic batching) (default: disabled)\n");
+    printf("  -cb, --cont-batching      enable continuous batching (a.k.a dynamic batching) (default: enabled)\n");
     printf("  -spf FNAME, --system-prompt-file FNAME\n");
     printf("                            set a file to load a system prompt (initial prompt of all slots), this is useful for chat applications.\n");
     printf("  -ctk TYPE, --cache-type-k TYPE\n");
@@ -2306,6 +2343,24 @@ static void server_params_parse(int argc, char ** argv, server_params & sparams,
                 break;
             }
             params.model = argv[i];
+        } else if (arg == "-mu" || arg == "--model-url") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.model_url = argv[i];
+        } else if (arg == "-hfr" || arg == "--hf-repo") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.hf_repo = argv[i];
+        } else if (arg == "-hff" || arg == "--hf-file") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.hf_file = argv[i];
         } else if (arg == "-a" || arg == "--alias") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -2423,6 +2478,12 @@ static void server_params_parse(int argc, char ** argv, server_params & sparams,
                 break;
             }
             params.n_batch = std::stoi(argv[i]);
+        } else if (arg == "-ub" || arg == "--ubatch-size") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.n_ubatch = std::stoi(argv[i]);
         } else if (arg == "--gpu-layers" || arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -2452,15 +2513,15 @@ static void server_params_parse(int argc, char ** argv, server_params & sparams,
                 invalid_param = true;
                 break;
             }
-#ifndef GGML_USE_CUBLAS
-            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. Setting the split mode has no effect.\n");
-#endif // GGML_USE_CUBLAS
+#ifndef GGML_USE_CUDA
+            fprintf(stderr, "warning: llama.cpp was compiled without CUDA. Setting the split mode has no effect.\n");
+#endif // GGML_USE_CUDA
         } else if (arg == "--tensor-split" || arg == "-ts") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
-#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_SYCL)
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_SYCL)
             std::string arg_next = argv[i];
 
             // split string by , and /
@@ -2477,17 +2538,17 @@ static void server_params_parse(int argc, char ** argv, server_params & sparams,
                 }
             }
 #else
-            LOG_WARNING("llama.cpp was compiled without cuBLAS. It is not possible to set a tensor split.\n", {});
-#endif // GGML_USE_CUBLAS
+            LOG_WARNING("llama.cpp was compiled without CUDA. It is not possible to set a tensor split.\n", {});
+#endif // GGML_USE_CUDA
         } else if (arg == "--main-gpu" || arg == "-mg") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
-#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_SYCL)
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_SYCL)
             params.main_gpu = std::stoi(argv[i]);
 #else
-            LOG_WARNING("llama.cpp was compiled without cuBLAS. It is not possible to set a main GPU.", {});
+            LOG_WARNING("llama.cpp was compiled without CUDA. It is not possible to set a main GPU.", {});
 #endif
         } else if (arg == "--lora") {
             if (++i >= argc) {
@@ -2762,6 +2823,7 @@ int main(int argc, char ** argv) {
         res.set_header("Access-Control-Allow-Credentials", "true");
         res.set_header("Access-Control-Allow-Methods",     "POST");
         res.set_header("Access-Control-Allow-Headers",     "*");
+        return res.set_content("", "application/json; charset=utf-8");
     });
 
     svr->set_logger(log_server_request);
@@ -3370,44 +3432,37 @@ int main(int argc, char ** argv) {
         const json body = json::parse(req.body);
         bool is_openai = false;
 
-        // an input prompt can string or a list of tokens (integer)
-        std::vector<json> prompts;
+        // an input prompt can be a string or a list of tokens (integer)
+        json prompt;
         if (body.count("input") != 0) {
             is_openai = true;
-            if (body["input"].is_array()) {
-                // support multiple prompts
-                for (const json & elem : body["input"]) {
-                    prompts.push_back(elem);
-                }
-            } else {
-                // single input prompt
-                prompts.push_back(body["input"]);
-            }
+            prompt = body["input"];
         } else if (body.count("content") != 0) {
-            // only support single prompt here
-            std::string content = body["content"];
-            prompts.push_back(content);
+            // with "content", we only support single prompt
+            prompt = std::vector<std::string>{body["content"]};
         } else {
             res_error(res, format_error_response("\"input\" or \"content\" must be provided", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
-        // process all prompts
-        json responses = json::array();
-        for (auto & prompt : prompts) {
-            // TODO @ngxson : maybe support multitask for this endpoint?
-            // create and queue the task
+        // create and queue the task
+        json responses;
+        {
             const int id_task = ctx_server.queue_tasks.get_new_id();
-
             ctx_server.queue_results.add_waiting_task_id(id_task);
-            ctx_server.request_completion(id_task, -1, { {"prompt", prompt}, { "n_predict", 0}}, false, true);
+            ctx_server.request_completion(id_task, -1, {{"prompt", prompt}}, false, true);
 
             // get the result
             server_task_result result = ctx_server.queue_results.recv(id_task);
             ctx_server.queue_results.remove_waiting_task_id(id_task);
             if (!result.error) {
-                // append to the responses
-                responses.push_back(result.data);
+                if (result.data.count("results")) {
+                    // result for multi-task
+                    responses = result.data["results"];
+                } else {
+                    // result for single task
+                    responses = std::vector<json>{result.data};
+                }
             } else {
                 // error received, ignore everything else
                 res_error(res, result.data);
@@ -3416,22 +3471,17 @@ int main(int argc, char ** argv) {
         }
 
         // write JSON response
-        json root;
-        if (is_openai) {
-            json res_oai = json::array();
-            int i = 0;
-            for (auto & elem : responses) {
-                res_oai.push_back(json{
-                    {"embedding", json_value(elem, "embedding", json::array())},
-                    {"index",     i++},
-                    {"object",    "embedding"}
-                });
-            }
-            root = format_embeddings_response_oaicompat(body, res_oai);
-        } else {
-            root = responses[0];
-        }
+        json root = is_openai
+            ? format_embeddings_response_oaicompat(body, responses)
+            : responses[0];
         return res.set_content(root.dump(), "application/json; charset=utf-8");
+    };
+
+    auto handle_static_file = [](unsigned char * content, size_t len, const char * mime_type) {
+        return [content, len, mime_type](const httplib::Request &, httplib::Response & res) {
+            res.set_content(reinterpret_cast<const char*>(content), len, mime_type);
+            return false;
+        };
     };
 
     //
@@ -3445,17 +3495,6 @@ int main(int argc, char ** argv) {
     }
 
     // using embedded static files
-    auto handle_static_file = [](unsigned char * content, size_t len, const char * mime_type) {
-        return [content, len, mime_type](const httplib::Request &, httplib::Response & res) {
-            res.set_content(reinterpret_cast<const char*>(content), len, mime_type);
-            return false;
-        };
-    };
-
-    svr->Options(R"(/.*)", [](const httplib::Request &, httplib::Response & res) {
-        // TODO @ngxson : I have no idea what it is... maybe this is redundant?
-        return res.set_content("", "application/json; charset=utf-8");
-    });
     svr->Get("/", handle_static_file(index_html, index_html_len, "text/html; charset=utf-8"));
     svr->Get("/index.js", handle_static_file(index_js, index_js_len, "text/javascript; charset=utf-8"));
     svr->Get("/completion.js", handle_static_file(completion_js, completion_js_len, "text/javascript; charset=utf-8"));
