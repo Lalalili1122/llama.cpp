@@ -46,7 +46,47 @@ endif
 
 default: $(BUILD_TARGETS)
 
+test: $(TEST_TARGETS)
+	@failures=0; \
+	for test_target in $(TEST_TARGETS); do \
+		if [ "$$test_target" = "tests/test-tokenizer-0-llama" ]; then \
+			./$$test_target $(CURDIR)/models/ggml-vocab-llama.gguf; \
+		elif [ "$$test_target" = "tests/test-tokenizer-0-falcon" ]; then \
+			./$$test_target $(CURDIR)/models/ggml-vocab-falcon.gguf; \
+		elif [ "$$test_target" = "tests/test-tokenizer-1-llama" ]; then \
+			continue; \
+		elif [ "$$test_target" = "tests/test-tokenizer-1-bpe" ]; then \
+			continue; \
+		else \
+			echo "Running test $$test_target..."; \
+			./$$test_target; \
+		fi; \
+		if [ $$? -ne 0 ]; then \
+			printf 'Test %s FAILED!\n\n' $$test_target; \
+			failures=$$(( failures + 1 )); \
+		else \
+			printf 'Test %s passed.\n\n' $$test_target; \
+		fi; \
+	done; \
+	if [ $$failures -gt 0 ]; then \
+		printf '\n%s tests failed.\n' $$failures; \
+		exit 1; \
+	fi
+	@echo 'All tests passed.'
+
 all: $(BUILD_TARGETS) $(TEST_TARGETS)
+
+coverage: ## Run code coverage
+	gcov -pb tests/*.cpp
+
+lcov-report: coverage ## Generate lcov report
+	mkdir -p lcov-report
+	lcov --capture --directory . --output-file lcov-report/coverage.info
+	genhtml lcov-report/coverage.info --output-directory lcov-report
+
+gcovr-report: coverage ## Generate gcovr report
+	mkdir -p gcovr-report
+	gcovr --root . --html --html-details --output gcovr-report/coverage.html
 
 ifdef RISCV_CROSS_COMPILE
 CC	:= riscv64-unknown-linux-gnu-gcc
@@ -103,6 +143,16 @@ endif
 # some memory allocation are available on Linux through GNU extensions in libc
 ifeq ($(UNAME_S),Linux)
 	MK_CPPFLAGS += -D_GNU_SOURCE
+endif
+
+# RLIMIT_MEMLOCK came in BSD, is not specified in POSIX.1,
+# and on macOS its availability depends on enabling Darwin extensions
+# similarly on DragonFly, enabling BSD extensions is necessary
+ifeq ($(UNAME_S),Darwin)
+	MK_CPPFLAGS += -D_DARWIN_C_SOURCE
+endif
+ifeq ($(UNAME_S),DragonFly)
+	MK_CPPFLAGS += -D__BSD_VISIBLE
 endif
 
 # alloca is a non-standard interface that is not visible on BSDs when
@@ -186,6 +236,7 @@ ifneq '' '$(findstring dyld-1015.7,$(shell $(CC) $(LDFLAGS) -Wl,-v 2>&1))'
 endif
 
 # OS specific
+# TODO: support Windows
 ifneq '' '$(filter $(UNAME_S),Linux Darwin FreeBSD NetBSD OpenBSD Haiku)'
 	MK_CFLAGS   += -pthread
 	MK_CXXFLAGS += -pthread
@@ -250,6 +301,40 @@ ifneq '' '$(findstring mingw,$(shell $(CC) -dumpmachine))'
 
 	# Target Windows 8 for PrefetchVirtualMemory
 	MK_CPPFLAGS += -D_WIN32_WINNT=0x602
+endif
+
+ifneq ($(filter aarch64%,$(UNAME_M)),)
+	# Apple M1, M2, etc.
+	# Raspberry Pi 3, 4, Zero 2 (64-bit)
+	# Nvidia Jetson
+	MK_CFLAGS   += -mcpu=native
+	MK_CXXFLAGS += -mcpu=native
+	JETSON_RELEASE_INFO = $(shell jetson_release)
+	ifdef JETSON_RELEASE_INFO
+		ifneq ($(filter TX2%,$(JETSON_RELEASE_INFO)),)
+			JETSON_EOL_MODULE_DETECT = 1
+			CC = aarch64-unknown-linux-gnu-gcc
+			cxx = aarch64-unknown-linux-gnu-g++
+		endif
+	endif
+endif
+
+ifneq ($(filter armv6%,$(UNAME_M)),)
+	# Raspberry Pi 1, Zero
+	MK_CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
+	MK_CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
+endif
+
+ifneq ($(filter armv7%,$(UNAME_M)),)
+	# Raspberry Pi 2
+	MK_CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
+	MK_CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
+endif
+
+ifneq ($(filter armv8%,$(UNAME_M)),)
+	# Raspberry Pi 3, 4, Zero 2 (32-bit)
+	MK_CFLAGS   += -mfp16-format=ieee -mno-unaligned-access
+	MK_CXXFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
 
 ifneq ($(filter ppc64%,$(UNAME_M)),)
@@ -623,6 +708,9 @@ common.o: common/common.cpp $(COMMON_H_DEPS)
 sampling.o: common/sampling.cpp $(COMMON_H_DEPS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+console.o: common/console.cpp common/console.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 grammar-parser.o: common/grammar-parser.cpp common/grammar-parser.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -644,7 +732,7 @@ libllama.a: llama.o ggml.o $(OBJS) $(COMMON_DEPS)
 clean:
 	rm -vrf *.o tests/*.o *.so *.a *.dll benchmark-matmult lookup-create lookup-merge lookup-stats common/build-info.cpp *.dot $(COV_TARGETS) $(BUILD_TARGETS) $(TEST_TARGETS)
 	rm -vrf ggml-cuda/*.o
-	find examples -type f -name "*.o" -delete
+	find examples pocs -type f -name "*.o" -delete
 
 #
 # Examples
