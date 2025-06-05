@@ -55,6 +55,20 @@ std::string read_file(const std::string& filepath) {
     return buffer.str();
 }
 
+std::string extract_pdf_text(const std::string &file_path) {
+    std::ostringstream all_text;
+    std::unique_ptr<poppler::document> doc(poppler::document::load_from_file(file_path));
+    if (!doc) return "";
+    for (int i = 0; i < doc->pages(); ++i) {
+        std::unique_ptr<poppler::page> page(doc->create_page(i));
+        if (page) {
+            auto utf8 = page->text().to_utf8();
+            all_text << std::string(utf8.data(), utf8.size()) << "\n";
+        }
+    }
+    return all_text.str();
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip GH copilot requests when using default port
     if (req.path == "/v1/health" || req.path == "/v1/completions") {
@@ -790,11 +804,11 @@ int main(int argc, char ** argv) {
                     }
                 }
                 else if (has_extension(filename, ".pdf")) {
-                    // PDF: (Optional) Extract text and append; needs a PDF parsing library.
-                    // For now, you can return an error or skip.
-                    // extra_text += extract_pdf_text(file_path);
-                    // Or:
-                    continue; // Or error
+                    std::string content = extract_pdf_text(file_path);
+                    if (!content.empty()) {
+                        extra_text += "\n--- File: " + filename + " ---\n";
+                        extra_text += content + "\n";
+                    }
                 }
                 else if (has_extension(filename, ".png")  || has_extension(filename, ".jpg") ||
                         has_extension(filename, ".jpeg") || has_extension(filename, ".webp") ||
@@ -938,6 +952,70 @@ int main(int argc, char ** argv) {
 
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
+        std::string extra_text;
+
+        if (body.contains("files") && body["files"].is_array()) {
+            for (const auto &filename_json : body["files"]) {
+                std::string filename = filename_json.get<std::string>();
+                std::string file_path = "./uploads/" + filename;
+
+                if (has_extension(filename, ".txt") || has_extension(filename, ".md") ||
+                    has_extension(filename, ".py")  || has_extension(filename, ".cpp") ||
+                    has_extension(filename, ".json") || has_extension(filename, ".csv")) 
+                {
+                    std::string content = read_file(file_path);
+                    if (!content.empty()) {
+                        extra_text += "\n--- File: " + filename + " ---\n";
+                        extra_text += content + "\n";
+                    }
+                }
+                else if (has_extension(filename, ".pdf")) {
+                    std::string content = extract_pdf_text(file_path);
+                    if (!content.empty()) {
+                        extra_text += "\n--- File: " + filename + " ---\n";
+                        extra_text += content + "\n";
+                    }
+                }
+                else if (has_extension(filename, ".png")  || has_extension(filename, ".jpg") ||
+                        has_extension(filename, ".jpeg") || has_extension(filename, ".webp") ||
+                        has_extension(filename, ".bmp")  || has_extension(filename, ".mp3")  ||
+                        has_extension(filename, ".wav")) 
+                {
+                    if (ctx_server.mctx == nullptr) {
+                        res_error(res, format_error_response("Model does not support images/audio.", ERROR_TYPE_NOT_SUPPORTED));
+                        return;
+                    }
+                    std::string content = read_file(file_path);
+                    if (!content.empty()) {
+                        files.emplace_back(
+                            reinterpret_cast<const unsigned char*>(content.data()),
+                            reinterpret_cast<const unsigned char*>(content.data()) + content.size()
+                        );
+                    }
+                }
+                else {
+                    continue;
+                }
+            }
+        }
+
+        // Append extra_text to the last user message in the chat
+        if (!extra_text.empty()) {
+            if (body.contains("messages") && body["messages"].is_array() && !body["messages"].empty()) {
+                // Find the last user message
+                for (int i = (int)body["messages"].size() - 1; i >= 0; --i) {
+                    if (body["messages"][i].contains("role") && body["messages"][i]["role"] == "user" && body["messages"][i].contains("content")) {
+                        if (body["messages"][i]["content"].is_string()) {
+                            body["messages"][i]["content"] = body["messages"][i]["content"].get<std::string>() + "\n" + extra_text;
+                        } else {
+                            body["messages"][i]["content"] = extra_text;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         json data = oaicompat_chat_params_parse(
             body,
             ctx_server.oai_parser_opt,

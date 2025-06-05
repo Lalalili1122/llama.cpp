@@ -34,6 +34,10 @@
 #include <filesystem>
 #include <algorithm>
 
+#include <poppler-document.h>
+#include <poppler-page.h>
+#include <memory>
+
 // auto generated files (see README.md for details)
 #include "index.html.gz.hpp"
 #include "loading.html.hpp"

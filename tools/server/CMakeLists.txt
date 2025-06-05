@@ -33,7 +33,6 @@ endforeach()
 add_executable(${TARGET} ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)
 
-# --- Poppler PDF support ---
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(POPPLER_CPP REQUIRED poppler-cpp)
 
