@@ -8,6 +8,11 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
+#include "json-schema-to-grammar.h"
+#include "sampling.h"
+#include "speculative.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
@@ -24,6 +29,13 @@
 #include <vector>
 #include <memory>
 #include <cinttypes>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+
+// auto generated files (see README.md for details)
+#include "index.html.gz.hpp"
+#include "loading.html.hpp"
 
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
 
