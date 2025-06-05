@@ -33,6 +33,13 @@ endforeach()
 add_executable(${TARGET} ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)
 
+# --- Poppler PDF support ---
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(POPPLER_CPP REQUIRED poppler-cpp)
+
+target_include_directories(${TARGET} PRIVATE ${POPPLER_CPP_INCLUDE_DIRS})
+target_link_libraries(${TARGET} PRIVATE ${POPPLER_CPP_LIBRARIES})
+
 target_include_directories(${TARGET} PRIVATE ../llava)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PRIVATE common mtmd ${CMAKE_THREAD_LIBS_INIT})
