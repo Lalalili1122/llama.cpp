@@ -12,7 +12,7 @@ FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 ARG CUDA_DOCKER_ARCH=default
 
 RUN apt-get update && \
-    apt-get install -y build-essential cmake python3 python3-pip git libcurl4-openssl-dev libgomp1 libpoppler-cpp-dev
+    apt-get install -y build-essential cmake python3 python3-pip git libcurl4-openssl-dev libgomp1 libpoppler-cpp-dev pkg-config
 
 WORKDIR /app
 
@@ -39,7 +39,7 @@ RUN mkdir -p /app/full \
 FROM ${BASE_CUDA_RUN_CONTAINER} AS base
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl libpoppler-cpp0 \
+    && apt-get install -y libgomp1 curl libpoppler-cpp0v5 \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
