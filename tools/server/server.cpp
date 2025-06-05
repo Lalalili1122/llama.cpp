@@ -41,6 +41,20 @@ json format_error_response(const std::string & message, const enum error_type ty
     };
 }
 
+bool has_extension(const std::string& filename, const std::string& ext) {
+    if (filename.length() >= ext.length()) {
+        return (0 == filename.compare(filename.length() - ext.length(), ext.length(), ext));
+    }
+    return false;
+}
+
+std::string read_file(const std::string& filepath) {
+    std::ifstream ifs(filepath, std::ios::binary);
+    std::stringstream buffer;
+    buffer << ifs.rdbuf();
+    return buffer.str();
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip GH copilot requests when using default port
     if (req.path == "/v1/health" || req.path == "/v1/completions") {
@@ -753,9 +767,10 @@ int main(int argc, char ** argv) {
         }
     };
 
-    const auto handle_completions = [&handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_completions = [&handle_completions_impl, &ctx_server, &res_error](const httplib::Request & req, httplib::Response & res) {
         json data = json::parse(req.body);
         std::vector<raw_buffer> files;
+        std::string extra_text;
 
         // Handle "files" field for uploaded file references
         if (data.contains("files") && data["files"].is_array()) {
@@ -763,19 +778,53 @@ int main(int argc, char ** argv) {
                 std::string filename = filename_json.get<std::string>();
                 std::string file_path = "./uploads/" + filename;
 
-                // Open/read file
-                std::ifstream ifs(file_path, std::ios::binary);
-                if (!ifs) {
-                    // Optionally: return error or skip
+                if (has_extension(filename, ".txt") || has_extension(filename, ".md") ||
+                    has_extension(filename, ".py")  || has_extension(filename, ".cpp") ||
+                    has_extension(filename, ".json") || has_extension(filename, ".csv")) 
+                {
+
+                    std::string content = read_file(file_path);
+                    if (!content.empty()) {
+                        extra_text += "\n--- File: " + filename + " ---\n";
+                        extra_text += content + "\n";
+                    }
+                }
+                else if (has_extension(filename, ".pdf")) {
+                    // PDF: (Optional) Extract text and append; needs a PDF parsing library.
+                    // For now, you can return an error or skip.
+                    // extra_text += extract_pdf_text(file_path);
+                    // Or:
+                    continue; // Or error
+                }
+                else if (has_extension(filename, ".png")  || has_extension(filename, ".jpg") ||
+                        has_extension(filename, ".jpeg") || has_extension(filename, ".webp") ||
+                        has_extension(filename, ".bmp")  || has_extension(filename, ".mp3")  ||
+                        has_extension(filename, ".wav")) 
+                {
+                    if (ctx_server.mctx == nullptr) {
+                        res_error(res, format_error_response("Model does not support images/audio.", ERROR_TYPE_NOT_SUPPORTED));
+                        return;
+                    }
+                    std::string content = read_file(file_path);
+                    if (!content.empty()) {
+                        files.emplace_back(
+                            reinterpret_cast<const unsigned char*>(content.data()),
+                            reinterpret_cast<const unsigned char*>(content.data()) + content.size()
+                        );
+                    }
+                }
+                else {
+                    // Unknown file type: skip or error
                     continue;
                 }
-                std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-                if (!content.empty()) {
-                    files.emplace_back(
-                        reinterpret_cast<const unsigned char*>(content.data()),
-                        reinterpret_cast<const unsigned char*>(content.data()) + content.size()
-                    );
-                }
+            }
+        }
+
+        if (!extra_text.empty()) {
+            if (data.contains("prompt") && data["prompt"].is_string()) {
+                data["prompt"] = data["prompt"].get<std::string>() + "\n" + extra_text;
+            } else {
+                data["prompt"] = extra_text;
             }
         }
 

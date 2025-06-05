@@ -32,6 +32,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <algorithm>
 
 // auto generated files (see README.md for details)
 #include "index.html.gz.hpp"
