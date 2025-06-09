@@ -5,13 +5,12 @@ option(LLAMA_SERVER_SSL "Build SSL support for the server" OFF)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 if (MINGW)
-    # fix: https://github.com/ggml-org/llama.cpp/actions/runs/9651004652/job/26617901362?pr=8006
     add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
 set(TARGET_SRCS
     server.cpp
-    utils.hpp
+    server_error.cpp
 )
 set(PUBLIC_ASSETS
     index.html.gz

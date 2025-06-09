@@ -38,10 +38,6 @@
 #include <poppler-page.h>
 #include <memory>
 
-// auto generated files (see README.md for details)
-#include "index.html.gz.hpp"
-#include "loading.html.hpp"
-
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
 
 using json = nlohmann::ordered_json;
