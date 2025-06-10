@@ -12,6 +12,7 @@ set(TARGET_SRCS
     server.cpp
     server_error.cpp
     server_utils.cpp
+    routes.cpp
 )
 set(PUBLIC_ASSETS
     index.html.gz
