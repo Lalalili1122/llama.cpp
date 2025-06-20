@@ -56,11 +56,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
     ctx_server.init();
-    printf("[MAIN] ctx_server address: %p\n", (void*)&ctx_server);
-    printf("[MAIN] ctx_server.ctx: %p\n", (void*)ctx_server.ctx);
-    printf("[MAIN] ctx_server.vocab: %p\n", (void*)ctx_server.vocab);
-    fflush(stdout);
-
 
     // Start backend and NUMA (after model load, before serving)
     llama_backend_init();

@@ -80,7 +80,6 @@ inline std::string stop_type_to_str(stop_type type) {
 }
 
 std::string read_file_to_string(const std::string & filepath);
-std::string stop_type_to_str(stop_type type);
 using json = nlohmann::ordered_json;
 json format_error_response(const std::string & message, enum error_type type);
 
