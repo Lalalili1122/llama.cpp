@@ -5,7 +5,7 @@
 using Handler = std::function<void(const httplib::Request &, httplib::Response &)>;
 
 // Define handlers
-static void handle_health(const httplib::Request &, httplib::Response & res) {
+static void handle_health(const httplib::Request & /*req*/, httplib::Response & res) {
     // error and loading states are handled by middleware
     json health = {
         { "status", "ok" }
@@ -13,11 +13,10 @@ static void handle_health(const httplib::Request &, httplib::Response & res) {
     res_ok(res, health);
 }
 
-static void handle_metrics(const httplib::Request &, httplib::Response & res, server_context & ctx_server,
+static void handle_metrics(const httplib::Request & /*req*/, httplib::Response & res, server_context & ctx_server,
                            common_params & params) {
     if (!params.endpoint_metrics) {
-        res_error(res, format_error_response("This server does not support metrics "
-                                             "endpoint. Start it with `--metrics`",
+        res_error(res, format_error_response("This server does not support metrics endpoint. Start it with `--metrics`",
                                              ERROR_TYPE_NOT_SUPPORTED));
         return;
     }
@@ -40,8 +39,7 @@ static void handle_metrics(const httplib::Request &, httplib::Response & res, se
         return;
     }
 
-    // TODO: get rid of this dynamic_cast
-    auto res_metrics = dynamic_cast<server_task_result_metrics *>(result.get());
+    auto * res_metrics = dynamic_cast<server_task_result_metrics *>(result.get());
     GGML_ASSERT(res_metrics != nullptr);
 
     // metrics definition:
@@ -50,16 +48,16 @@ static void handle_metrics(const httplib::Request &, httplib::Response & res, se
         { "counter",
          { { { "name", "prompt_tokens_total" },
               { "help", "Number of prompt tokens processed." },
-              { "value", (uint64_t) res_metrics->n_prompt_tokens_processed_total } },
+              { "value", res_metrics->n_prompt_tokens_processed_total } },
             { { "name", "prompt_seconds_total" },
               { "help", "Prompt process time" },
-              { "value", (uint64_t) res_metrics->t_prompt_processing_total / 1.e3 } },
+              { "value", res_metrics->t_prompt_processing_total / 1.e3 } },
             { { "name", "tokens_predicted_total" },
               { "help", "Number of generation tokens processed." },
-              { "value", (uint64_t) res_metrics->n_tokens_predicted_total } },
+              { "value", res_metrics->n_tokens_predicted_total } },
             { { "name", "tokens_predicted_seconds_total" },
               { "help", "Predict process time" },
-              { "value", (uint64_t) res_metrics->t_tokens_generation_total / 1.e3 } },
+              { "value", res_metrics->t_tokens_generation_total / 1.e3 } },
             { { "name", "n_decode_total" },
               { "help", "Total number of llama_decode() calls" },
               { "value", res_metrics->n_decode_total } },
@@ -109,7 +107,7 @@ static void handle_metrics(const httplib::Request &, httplib::Response & res, se
     res.status = 200;  // HTTP OK
 }
 
-static void handle_props(const httplib::Request &, httplib::Response & res, server_context & ctx_server) {
+static void handle_props(const httplib::Request & /*req*/, httplib::Response & res, server_context & ctx_server) {
     // this endpoint is publicly available, please only return what is safe to
     // be exposed
     json data = {
@@ -129,7 +127,7 @@ static void handle_props(const httplib::Request &, httplib::Response & res, serv
         { "build_info", build_info },
     };
     if (ctx_server.params_base.use_jinja) {
-        if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
+        if (const auto * tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
             data["chat_template_tool_use"] = tool_use_src;
         }
     }
@@ -153,7 +151,7 @@ static void handle_props_change(const httplib::Request & req, httplib::Response 
     });
 }
 
-static void handle_api_show(const httplib::Request &, httplib::Response & res, server_context & ctx_server) {
+static void handle_api_show(const httplib::Request & /*req*/, httplib::Response & res, server_context & ctx_server) {
     json data = {
         {
          "template", common_chat_templates_source(ctx_server.chat_templates.get()),
@@ -182,7 +180,7 @@ static void handle_api_show(const httplib::Request &, httplib::Response & res, s
     res_ok(res, data);
 }
 
-static void handle_models(const httplib::Request &, httplib::Response & res, common_params & params,
+static void handle_models(const httplib::Request & /*req*/, httplib::Response & res, common_params & params,
                           server_context & ctx_server, std::atomic<server_state> & state) {
     server_state current_state = state.load();
     json         model_meta    = nullptr;
@@ -275,7 +273,7 @@ static void handle_completions_impl(server_task_type type, json & data, const st
             if (!has_mtmd && !files.empty()) {
                 throw std::runtime_error("This server does not support multimodal");
             }
-            for (auto & file : files) {
+            for (const auto & file : files) {
                 mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, file.data(), file.size()));
                 if (!bmp.ptr) {
                     throw std::runtime_error("Failed to load image or audio file");
@@ -383,9 +381,8 @@ static void handle_completions_impl(server_task_type type, json & data, const st
                             }
                         }
                         return true;
-                    } else {
-                        return server_sent_event(sink, "data", res_json);
                     }
+                    return server_sent_event(sink, "data", res_json);
                 },
                 [&](const json & error_data) { server_sent_event(sink, "error", error_data); },
                 [&sink]() {
@@ -919,11 +916,12 @@ static void handle_rerank(const httplib::Request & req, httplib::Response & res,
     res_ok(res, root);
 }
 
-static void handle_lora_adapters_list(const httplib::Request &, httplib::Response & res, server_context & ctx_server) {
+static void handle_lora_adapters_list(const httplib::Request & /*req*/, httplib::Response & res,
+                                      server_context & ctx_server) {
     json         result = json::array();
     const auto & loras  = ctx_server.params_base.lora_adapters;
     for (size_t i = 0; i < loras.size(); ++i) {
-        auto & lora = loras[i];
+        const auto & lora = loras[i];
         result.push_back({
             { "id",    i          },
             { "path",  lora.path  },
@@ -962,7 +960,7 @@ static void handle_lora_adapters_apply(const httplib::Request & req, httplib::Re
 
     GGML_ASSERT(dynamic_cast<server_task_result_apply_lora *>(result.get()) != nullptr);
     res_ok(res, result->to_json());
-};
+}
 
 static void handle_slots(const httplib::Request & req, httplib::Response & res, server_context & ctx_server,
                          common_params & params) {
@@ -991,8 +989,7 @@ static void handle_slots(const httplib::Request & req, httplib::Response & res, 
         return;
     }
 
-    // TODO: get rid of this dynamic_cast
-    auto res_metrics = dynamic_cast<server_task_result_metrics *>(result.get());
+    auto * res_metrics = dynamic_cast<server_task_result_metrics *>(result.get());
     GGML_ASSERT(res_metrics != nullptr);
 
     // optionally return "fail_on_no_slot" error
@@ -1004,7 +1001,7 @@ static void handle_slots(const httplib::Request & req, httplib::Response & res, 
     }
 
     res_ok(res, res_metrics->slots_data);
-};
+}
 
 static void handle_slots_save(const httplib::Request & req, httplib::Response & res, server_context & ctx_server,
                               common_params & params, int id_slot) {
@@ -1037,7 +1034,7 @@ static void handle_slots_save(const httplib::Request & req, httplib::Response & 
     }
 
     res_ok(res, result->to_json());
-};
+}
 
 static void handle_slots_restore(const httplib::Request & req, httplib::Response & res, server_context & ctx_server,
                                  common_params & params, int id_slot) {
@@ -1071,10 +1068,9 @@ static void handle_slots_restore(const httplib::Request & req, httplib::Response
 
     GGML_ASSERT(dynamic_cast<server_task_result_slot_save_load *>(result.get()) != nullptr);
     res_ok(res, result->to_json());
-};
+}
 
-static void handle_slots_erase(const httplib::Request &, httplib::Response & res, server_context & ctx_server,
-                               int id_slot) {
+static void handle_slots_erase(httplib::Response & res, server_context & ctx_server, int id_slot) {
     int task_id = ctx_server.queue_tasks.get_new_id();
     {
         server_task task(SERVER_TASK_TYPE_SLOT_ERASE);
@@ -1095,7 +1091,7 @@ static void handle_slots_erase(const httplib::Request &, httplib::Response & res
 
     GGML_ASSERT(dynamic_cast<server_task_result_slot_erase *>(result.get()) != nullptr);
     res_ok(res, result->to_json());
-};
+}
 
 static void handle_slots_action(const httplib::Request & req, httplib::Response & res, server_context & ctx_server,
                                 common_params & params) {
@@ -1123,7 +1119,7 @@ static void handle_slots_action(const httplib::Request & req, httplib::Response 
     } else if (action == "restore") {
         handle_slots_restore(req, res, ctx_server, params, id_slot);
     } else if (action == "erase") {
-        handle_slots_erase(req, res, ctx_server, id_slot);
+        handle_slots_erase(res, ctx_server, id_slot);
     } else {
         res_error(res, format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
     }

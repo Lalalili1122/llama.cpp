@@ -1,5 +1,12 @@
 #pragma once
 
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+
+#include "json-schema-to-grammar.h"
+#include "sampling.h"
+#include "speculative.h"
 #include "utils.hpp"
 
 // mime type for sending response
@@ -7,10 +14,10 @@
 
 bool        has_extension(const std::string & filename, const std::string & ext);
 std::string read_file(const std::string & filepath);
-std::string extract_pdf_text(const std::string & filepath);
+std::string extract_pdf_text(const std::string & file_path);
 
 // ENUM
-enum stop_type {
+enum stop_type : std::uint8_t {
     STOP_TYPE_NONE,
     STOP_TYPE_EOS,
     STOP_TYPE_WORD,
@@ -18,7 +25,7 @@ enum stop_type {
 };
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
-enum slot_state {
+enum slot_state : std::uint8_t {
     SLOT_STATE_IDLE,
     SLOT_STATE_STARTED,  // TODO: this state is only used for setting up the initial prompt processing; maybe merge it with launch_slot_with_task in the future
     SLOT_STATE_PROCESSING_PROMPT,
@@ -26,12 +33,12 @@ enum slot_state {
     SLOT_STATE_GENERATING,
 };
 
-enum server_state {
+enum server_state : std::uint8_t {
     SERVER_STATE_LOADING_MODEL,  // Server is starting up, model not fully loaded yet
     SERVER_STATE_READY,          // Server is ready and model is loaded
 };
 
-enum server_task_type {
+enum server_task_type : std::uint8_t {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
@@ -45,7 +52,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SET_LORA,
 };
 
-enum oaicompat_type {
+enum oaicompat_type : std::uint8_t {
     OAICOMPAT_TYPE_NONE,
     OAICOMPAT_TYPE_CHAT,
     OAICOMPAT_TYPE_COMPLETION,
@@ -53,7 +60,7 @@ enum oaicompat_type {
 };
 
 // https://community.openai.com/t/openai-chat-list-of-error-codes-and-types/357791/11
-enum error_type {
+enum error_type : std::uint8_t {
     ERROR_TYPE_INVALID_REQUEST,
     ERROR_TYPE_AUTHENTICATION,
     ERROR_TYPE_SERVER,
@@ -133,7 +140,7 @@ struct slot_params {
 
         auto grammar_triggers = json::array();
         for (const auto & trigger : sampling.grammar_triggers) {
-            server_grammar_trigger ct(std::move(trigger));
+            server_grammar_trigger ct(trigger);
             grammar_triggers.push_back(ct.to_json());
         }
 
@@ -1118,15 +1125,14 @@ struct server_task_result_slot_save_load : server_task_result {
                 { "n_written", n_bytes                 },
                 { "timings",   { { "save_ms", t_ms } } },
             };
-        } else {
-            return json{
-                { "id_slot",    id_slot                    },
-                { "filename",   filename                   },
-                { "n_restored", n_tokens                   },
-                { "n_read",     n_bytes                    },
-                { "timings",    { { "restore_ms", t_ms } } },
-            };
         }
+        return json{
+            { "id_slot",    id_slot                    },
+            { "filename",   filename                   },
+            { "n_restored", n_tokens                   },
+            { "n_read",     n_bytes                    },
+            { "timings",    { { "restore_ms", t_ms } } },
+        };
     }
 };
 
@@ -1397,32 +1403,32 @@ struct server_slot {
     }
 
     json to_json() const {
-        auto j_id = id;
-        auto j_id_task = id_task;
-        auto j_n_ctx = n_ctx;
-        auto j_speculative = can_speculate();
+        auto j_id            = id;
+        auto j_id_task       = id_task;
+        auto j_n_ctx         = n_ctx;
+        auto j_speculative   = can_speculate();
         auto j_is_processing = is_processing();
-        auto j_non_causal = is_non_causal();
-        auto j_params = params.to_json();
-        auto j_prompt = (ctx ? prompt_tokens.detokenize(ctx, true) : "");
-        
+        auto j_non_causal    = is_non_causal();
+        auto j_params        = params.to_json();
+        auto j_prompt        = (ctx ? prompt_tokens.detokenize(ctx, true) : "");
+
         return json{
-            { "id", j_id },
-            { "id_task", j_id_task },
-            { "n_ctx", j_n_ctx },
-            { "speculative", j_speculative },
+            { "id",            j_id            },
+            { "id_task",       j_id_task       },
+            { "n_ctx",         j_n_ctx         },
+            { "speculative",   j_speculative   },
             { "is_processing", j_is_processing },
-            { "non_causal", j_non_causal },
-            { "params", j_params },
-            { "prompt", j_prompt },
+            { "non_causal",    j_non_causal    },
+            { "params",        j_params        },
+            { "prompt",        j_prompt        },
             { "next_token",
-            {
-                { "has_next_token", has_next_token },
-                { "has_new_line", has_new_line },
-                { "n_remain", n_remaining },
-                { "n_decoded", n_decoded },
-                { "stopping_word", stopping_word },
-            } },
+             {
+                  { "has_next_token", has_next_token },
+                  { "has_new_line", has_new_line },
+                  { "n_remain", n_remaining },
+                  { "n_decoded", n_decoded },
+                  { "stopping_word", stopping_word },
+              }                                },
         };
     }
 };
@@ -1996,7 +2002,7 @@ struct server_context {
                 queue_tasks.pop_deferred_task();
             };
 
-             printf("Before slot.reset %d\n", i);
+            printf("Before slot.reset %d\n", i);
             slot.reset();
             printf("After slot.reset %d\n", i);
 
@@ -2328,7 +2334,7 @@ struct server_context {
     }
 
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling,
-                              bool special, int idx) {
+                              bool special, int idx) const {
         size_t n_probs = slot.params.sampling.n_probs;
         size_t n_vocab = llama_vocab_n_tokens(vocab);
         if (post_sampling) {

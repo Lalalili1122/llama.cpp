@@ -4,13 +4,10 @@
 #include "base64.hpp"
 #include "chat.h"
 #include "common.h"
-#include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "log.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
-#include "sampling.h"
-#include "speculative.h"
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
@@ -24,8 +21,6 @@
 
 #include <algorithm>
 #include <cinttypes>
-#include <filesystem>
-#include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <random>
@@ -710,15 +705,16 @@ static json oaicompat_chat_params_parse(json &                           body, /
                     std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
                     if (parts.size() != 2) {
                         throw std::runtime_error("Invalid image_url.url value");
-                    } else if (!string_starts_with(parts[0], "data:image/")) {
-                        throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
-                    } else if (!string_ends_with(parts[0], "base64")) {
-                        throw std::runtime_error("image_url.url must be base64 encoded");
-                    } else {
-                        auto base64_data  = parts[1];
-                        auto decoded_data = base64_decode(base64_data);
-                        out_files.push_back(decoded_data);
                     }
+                    if (!string_starts_with(parts[0], "data:image/")) {
+                        throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
+                    }
+                    if (!string_ends_with(parts[0], "base64")) {
+                        throw std::runtime_error("image_url.url must be base64 encoded");
+                    }
+                    const auto & base64_data  = parts[1];
+                    auto         decoded_data = base64_decode(base64_data);
+                    out_files.push_back(decoded_data);
                 }
 
                 // replace this chunk with a marker
@@ -1139,9 +1135,8 @@ struct server_tokens {
         auto it = map_pos_to_media.find(pos);
         if (it != map_pos_to_media.end()) {
             return it->second;
-        } else {
-            throw std::runtime_error("Chunk not found");
         }
+        throw std::runtime_error("Chunk not found");
     }
 
     void push_back(llama_token tok) {
@@ -1164,8 +1159,8 @@ struct server_tokens {
             mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
             map_pos_to_media[start_pos] = std::move(new_chunk);
         } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-            size_t n_tokens;
-            auto   text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+            size_t       n_tokens;
+            const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
             for (size_t i = 0; i < n_tokens; ++i) {
                 push_back(text_tokens[i]);
             }
@@ -1231,10 +1226,10 @@ struct server_tokens {
     }
 
     std::string detokenize(const llama_context * ctx, bool special) const {
-        if (tokens.empty()) { 
+        if (tokens.empty()) {
             return "";
         };
-        
+
         llama_tokens text_tokens;
         text_tokens.reserve(tokens.size());
         for (const auto & t : tokens) {
@@ -1264,14 +1259,13 @@ struct server_tokens {
                     GGML_ASSERT(a_pos > 0 && "Invalid media chunk");  // should never happen
                     i += a_pos - 1;                                   // will be +1 by the for loop
                     continue;
-                } else {
-                    return i;
                 }
-            } else if (ai == bi) {
-                continue;
-            } else {
                 return i;
             }
+            if (ai == bi) {
+                continue;
+            }
+            return i;
         }
         return max_idx;  // all tokens are equal
     }
@@ -1283,7 +1277,7 @@ struct server_tokens {
         const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
         for (size_t i = 0; i < tokens.size(); ++i) {
-            auto & t = tokens[i];
+            const auto & t = tokens[i];
             if (t == LLAMA_TOKEN_NULL) {
                 try {
                     const auto & chunk = find_chunk(i);
@@ -1301,8 +1295,8 @@ struct server_tokens {
 
     // encode and decode the image chunk
     int32_t process_chunk(llama_context * ctx, mtmd_context * mctx, llama_pos n_past, int32_t seq_id,
-                          llama_pos & n_pos_out) {
-        auto &       chunk = find_chunk(n_past);
+                          llama_pos & n_pos_out) const {
+        const auto & chunk = find_chunk(n_past);
         const char * name  = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
         SRV_INF("processing %s...\n", name);
         int32_t   n_batch    = llama_n_batch(ctx);
