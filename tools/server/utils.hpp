@@ -1231,6 +1231,10 @@ struct server_tokens {
     }
 
     std::string detokenize(const llama_context * ctx, bool special) const {
+        if (tokens.empty()) { 
+            return "";
+        };
+        
         llama_tokens text_tokens;
         text_tokens.reserve(tokens.size());
         for (const auto & t : tokens) {
@@ -1244,8 +1248,8 @@ struct server_tokens {
     size_t get_common_prefix(const server_tokens & b) const {
         size_t max_idx = std::min(tokens.size(), b.tokens.size());
         for (size_t i = 0; i < max_idx; ++i) {
-            auto & ai = tokens[i];
-            auto & bi = b.tokens[i];
+            const auto & ai = tokens[i];
+            const auto & bi = b.tokens[i];
 
             if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
                 GGML_ASSERT(has_mtmd);

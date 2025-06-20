@@ -1398,23 +1398,32 @@ struct server_slot {
     }
 
     json to_json() const {
+        auto j_id = id;
+        auto j_id_task = id_task;
+        auto j_n_ctx = n_ctx;
+        auto j_speculative = can_speculate();
+        auto j_is_processing = is_processing();
+        auto j_non_causal = is_non_causal();
+        auto j_params = params.to_json();
+        auto j_prompt = (ctx ? prompt_tokens.detokenize(ctx, true) : "");
+        
         return json{
-            { "id", id },
-            { "id_task", id_task },
-            { "n_ctx", n_ctx },
-            { "speculative", can_speculate() },
-            { "is_processing", is_processing() },
-            { "non_causal", is_non_causal() },
-            { "params", params.to_json() },
-            { "prompt", prompt_tokens.detokenize(ctx, true) },
+            { "id", j_id },
+            { "id_task", j_id_task },
+            { "n_ctx", j_n_ctx },
+            { "speculative", j_speculative },
+            { "is_processing", j_is_processing },
+            { "non_causal", j_non_causal },
+            { "params", j_params },
+            { "prompt", j_prompt },
             { "next_token",
-             {
-                  { "has_next_token", has_next_token },
-                  { "has_new_line", has_new_line },
-                  { "n_remain", n_remaining },
-                  { "n_decoded", n_decoded },
-                  { "stopping_word", stopping_word },
-              } },
+            {
+                { "has_next_token", has_next_token },
+                { "has_new_line", has_new_line },
+                { "n_remain", n_remaining },
+                { "n_decoded", n_decoded },
+                { "stopping_word", stopping_word },
+            } },
         };
     }
 };
@@ -1954,6 +1963,7 @@ struct server_context {
         SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
 
         for (int i = 0; i < params_base.n_parallel; i++) {
+            printf("Before slot creation %d\n", i);
             server_slot slot;
 
             slot.id                    = i;
@@ -1987,12 +1997,17 @@ struct server_context {
                 queue_tasks.pop_deferred_task();
             };
 
+             printf("Before slot.reset %d\n", i);
             slot.reset();
+            printf("After slot.reset %d\n", i);
 
             slots.push_back(std::move(slot));
+            printf("After slots.push_back %d\n", i);
         }
 
+        printf("Before default_generation_settings_for_props\n");
         default_generation_settings_for_props = slots[0].to_json();
+        printf("After default_generation_settings_for_props\n");
 
         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
